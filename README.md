@@ -5,7 +5,7 @@ pion-sfu is a SFU-example based on [sfu-ws example](https://github.com/pion/exam
 
 
 ### Run pion-sfu
-Execute `go run *.go`
+Execute `go run main˝.go`
 
 ### Open the Web UI
  * Open [http://localhost:8080](http://localhost:8080). This will automatically connect. Now join from other tabs and browsers.
