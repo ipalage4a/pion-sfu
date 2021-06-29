@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8">
+</head>
+
+<body>
+  <button id="add-media">Add media</button>
+
+  <h3> Local Video </h3>
+  <video id="localVideo" width="160" height="120" autoplay muted></video> <br />
+
+  <h3> Remote Video </h3>
+  <div id="remoteVideos"></div> <br />
+
+  <h3> Logs </h3>
+  <div id="logs"></div>
+
+
+</body>
+
+<script>
+  // Создаем пир коннекшн и навешиваем на него необходимые коллбеки
+  let pc = new RTCPeerConnection()
+  pc.ts = new Date().getUTCMilliseconds();
+
+
+  // Создаем новое вебсокетно подключение для отправления сигналов вебртс на сервер
+  let ws = new WebSocket("{{.}}")
+
+  ws.onclose = function (evt) {
+    console.log("Websocket has closed")
+  }
+
+  // каллбек для обработки новых сообщений с севера
+  ws.onmessage = async function (evt) {
+    console.log("\n")
+    let msg = JSON.parse(evt.data)
+    if (!msg) {
+      return console.log('failed to parse msg')
+    }
+
+    let description
+    console.log("received: ", msg.event)
+    switch (msg.event) {
+      case 'offer':
+        try {
+          description = JSON.parse(msg.data)
+          if (!description) {
+            return console.log('failed to parse answer')
+          }
+  
+          console.log("\t", description.type)
+          await pc.setRemoteDescription(description)
+          await pc.setLocalDescription(await pc.createAnswer())
+          send({ event: 'answer', id: pc.ts, data: JSON.stringify(pc.localDescription) })
+        } catch(e) {
+          console.error(e)
+        }
+        return
+      case 'answer':
+        try {
+          description = JSON.parse(msg.data)
+          if (!description) {
+            return console.log('failed to parse answer')
+          }
+          console.log("\t", description.type)
+          await pc.setRemoteDescription(description)
+          return
+        } catch(e) {
+          console.error(e)
+        }
+    }
+  }
+
+  ws.onerror = function (evt) {
+    console.log("ERROR: " + evt.data)
+  }
+
+  ws.onopen = async function () {
+    await initPc()
+    ws.send(JSON.stringify({ event: "offer", id: pc.ts, data: JSON.stringify(pc.localDescription) }))
+  }
+
+  // создаем обработчик для кнопок подключения
+  let addMedia = document.querySelector("#add-media")
+
+  addMedia.onclick = function () {
+    navigator.mediaDevices.getUserMedia({ video: { width: 180, height: 180 }, audio: true })
+      .then(stream => {
+        document.getElementById('localVideo').srcObject = stream
+        stream.getTracks().forEach(track => pc.addTrack(track, stream))
+      }).catch(window.alert)
+  }
+
+
+  async function initPc() {
+    // Трансиверы для возможности получение айс-кандидатов без запроса доступа к медиа
+    pc.addTransceiver("audio")
+    pc.addTransceiver("video")
+
+    // Каллбеке обработки нового трека, полученного из RemoteDescription
+    pc.ontrack = function (event) {
+      if (event.track.kind === 'audio') {
+        return
+      }
+
+      let el = document.createElement(event.track.kind)
+      el.srcObject = event.streams[0]
+      el.widht = 180
+      el.height = 180
+      el.autoplay = true
+      el.controls = true
+      document.getElementById('remoteVideos').appendChild(el)
+
+      event.track.onmute = function (event) {
+        el.play()
+      }
+
+      event.streams[0].onremovetrack = ({ track }) => {
+        if (el.parentNode) {
+          el.parentNode.removeChild(el)
+        }
+      }
+    }
+
+    // Каллбек, который возможно понадобиться позже
+    // Файрится когда мы добавляем новый трек, например
+    pc.onnegotiationneeded = async () => {
+      console.log("onnegotiationneeded")
+      // Неявно создаем новый оффер после добавления трека для отправки
+      try {
+        await pc.setLocalDescription(await pc.createOffer)
+        console.log(pc.localDescription.type)
+        send({ event: 'publish', id: pc.ts, data: JSON.stringify(pc.localDescription) })
+      } catch (e) {
+        console.error(e)
+      }
+    }
+
+    // Каллбек, который файрится когда браузер может генерировать новые айс-кандидаты
+    // (Обычно, айс-кандидаты начинают лететь когда мы добавляем новый трек-отправитель)
+    pc.onicecandidate = e => {
+      if (!e.candidate) {
+        return
+      }
+      send({ event: 'candidate', id: pc.ts, data: JSON.stringify(e.candidate) })
+    }
+
+    try {
+      // Неявно создаем новый оффер и сетим его в локал дескрипшен, чтобы отправить позже
+      await pc.setLocalDescription(await pc.createOffer)
+    } catch(e) {
+      console.error(e)
+    }
+  }
+
+  function send(msg) {
+    console.log("sent: ",msg.event)
+    ws.send(JSON.stringify(msg))
+  }
+
+</script>
+
+</html>
